@@ -1,0 +1,188 @@
+---
+title: "CRISPR-A Screen"
+output: html_document
+---
+The following program is a tool for analyzing the results of a CRISPR activation screen.
+This program requires RStudio installed through Anaconda and a folder containing fastq files and the sgRNA library. The following proceedure should be used to prepare for use of this tool:
+
+1) Download Anaconda (available online)
+2) Open Anaconda-Navigator window and install RStudio
+3) Open a terminal window. Create environment for running 'mageck' by typing the following code in the terminal window:
+
+    conda create -c bioconda -n mageckenv mageck
+    
+4) Install 'mageck' by typing the following code in a terminal window:
+    
+    conda install -c bioconda mageck
+    
+5) Install 'tidyverse' by typing the following code in the terminal window:
+    
+    conda install -c r r-tidyverse 
+    
+5) Install 'MAGeCKFlute' by typing the following code in the terminal window:
+
+    conda install -c bioconda bioconductor-mageckflute
+  
+    
+6) Activate the 'mageck' environment by typing the following code in the terminal window.
+
+    conda activate mageckenv
+    
+8) IMPORTANT: This pipeline assumes that the string bound to 'input_folder' in the third chunk below defines the path to a folder containing raw fastq illumina sequencing files. It also assumes a file in the same folder titled "sgRNA_library.csv" that contains sgRNA names in the first column, the sgRNA sequences in the second column, and the target genes in the third column in csv format. 
+
+Note that 'mageck test' function used to run MAGeCK RRA requires the control (t = 0) and experimental (t = n, n > 0) outputs of the 'mageck count' to be specified separately as different arguments. To do this, we have sorted the output names accordingly by the differential strings "Day0" and "Day23". We recommend using fastq file names in the format "Sample_Day23_Rep2.fastq" where "Sample" is some name for the experiment, "23" is the number of days the cells have been allowed to grow, and "2" refers to the a replicate. The corresponding strings in the code below should be modified according to the specification of the data (i.e. if your experiment allows cells to grow 20 days before sequencing instead of 23 and has four replicates instead of two, etc).
+
+```{r}
+library(tidyverse)
+library(htmltools)
+library(DESeq2)
+```
+
+```{r setup}
+# Reassign input folder to appropriate path.
+input_folder <- "/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/"
+
+# Set working directory to the folder containing fastq files and sgRNA library file and create new folder in this directory that can be used to store desired results after analysis.
+knitr::opts_knit$set(root.dir = input_folder)
+system(paste0("mkdir ", input_folder, "/Mageck_Count/"))
+```
+
+
+```{r}
+# Use 'mageck count' function to generate count tables. Code here is designed to automatically run the functions in terminal.
+
+# Assign output labels based on names of input fastq files.
+input_folder %>%
+  list.files(full.names = F, pattern = "Sample") %>%
+  map(str_split, pattern = fixed(".fastq"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>%
+  unlist() %>%
+  paste0(",", collapse = "") %>% 
+  str_sub(start = 1L, end = -2L) -> output_names
+
+# Take input files.
+input_folder %>%
+  list.files(full.names = F, pattern = "Sample") %>%
+  unlist() %>%
+  paste(collapse = " ") -> input_files
+
+# Run 'mageck count' using terminal, see MAGeCK documentation for syntax.
+system(paste0("mageck count -l sgRNA_library.csv -n Sample --sample-label ", output_names, " --fastq ", input_files))
+
+  
+```
+
+
+```{r}
+# Use 'mageck rra' function to generate enrichment statistics from count tables. Code here is designed to automatically run the functions in terminal.
+
+# Get final (experimental) sample labels
+list.files(input_folder, full.names = F, pattern = "Day23") %>%
+  map(str_split, pattern = fixed(".fastq"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>%
+  unlist() %>%
+  paste0(",", collapse = "") %>% 
+  str_sub(start = 1L, end = -2L) -> output_files_exp
+  
+# Get initial (control) sample labels
+list.files(input_folder, full.names = F, pattern = "Day0") %>%
+  map(str_split, pattern = fixed(".fastq"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>%
+  unlist() %>%
+  paste0(",", collapse = "") %>% 
+  str_sub(start = 1L, end = -2L) -> output_files_contr
+
+# Run 'mageck rra' using terminal, see MAGeCK documentation for syntax.
+system(paste0("mageck test -k Sample.count.txt -t ", output_files_exp, " -c ", output_files_contr, " -n Sample_rra --remove-zero both --remove-zero-threshold 0"))
+
+
+```
+
+
+
+```{r}
+
+Count <- read.delim("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/Sample.count.txt")
+
+# Format count to work with metadata below **I think there might be a problem here which I am working on.
+Count_Formatted <- Count[,3:6]
+remove_rownames(Count_Formatted)
+row.names(Count_Formatted) <- make.names(Count$Gene, unique=T)
+
+```
+
+
+```{r}
+# Create metadata for colData argument of DESeqDataSetFromMatrix
+fastqDir= file.path("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/")
+list.files(fastqDir, pattern = "*.fastq") %>%
+str_split(pattern = fixed(".fastq"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>%
+  .[1:(length(.)/2)] %>%
+  unlist() %>%
+  str_sub(start = -1L, end = -1L) -> sampleNO
+
+list.files(fastqDir, pattern = "*.fastq") %>%
+str_split(pattern = fixed("Sample_"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>%
+  .[((length(.)/2)+1):(length(.))] %>%
+  str_split(pattern = fixed("_"), n = 2, simplify = T) %>%
+  map(~ .[1]) %>% 
+  .[1:(length(.)/2)] %>%
+  unlist() -> condition
+libraryName = paste(condition,"-", sampleNO, sep = "")
+metadata <- data.frame(sampleNO = sampleNO,
+                       condition = condition,
+                       fastq = fastq,
+                       libraryName = libraryName)
+
+
+dds <- DESeqDataSetFromMatrix(countData = Count_Formatted, colData = metadata, design = ~ condition)
+
+dds <- DESeq(dds)
+
+res <- results(dds)
+res_table <- data.frame(Gene = row.names(res), log2FoldChange = res$log2FoldChange)
+
+head(results(dds, tidy=T))
+
+```
+
+
+```{r}
+library(xlsx)
+
+neg_ctrlPath <- "/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/neg_contrl.xlsx"
+
+neg_ctrl <- read.xlsx(neg_ctrlPath, 1)
+neg_ctrl <- neg_ctrl$log2FoldChange
+```
+
+
+```{r}
+# Try to run CRISPhieRmix with DESeq2 results. So far it works with the mageck rra results but not the DESeq2 results, which I am trying to debug righ now.
+
+res_table %>%
+  filter(!is.na(log2FoldChange)) -> res_table
+
+act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = res_table$Gene, negCtrl = neg_ctrl, PLOT = T)
+
+```
+
+
+```{r}
+
+```
+
+
+```{r}
+hist(act_data$FDR, breaks = 100)
+```
+
+
+```{r}
+gene_ranks <- data.frame(genes = act_data$genes, FDR = act_data$FDR)
+head(gene_ranks[order(gene_ranks$FDR, decreasing = T), ], 20)
+```
+
+
