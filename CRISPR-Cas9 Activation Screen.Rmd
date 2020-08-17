@@ -36,6 +36,8 @@ Note that 'mageck test' function used to run MAGeCK RRA requires the control (t 
 library(tidyverse)
 library(htmltools)
 library(DESeq2)
+library(ggplot2)
+library(pROC)
 ```
 
 ```{r setup}
@@ -101,10 +103,10 @@ system(paste0("mageck test -k Sample.count.txt -t ", output_files_exp, " -c ", o
 
 
 ```{r}
-
+# Read in count matrix outputted from 'mageck rra'
 Count <- read.delim("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/Sample.count.txt")
 
-# Format count to work with metadata below **I think there might be a problem here which I am working on.
+# Format the count matrix in preparatio for use as an argument in the DESeqDataSetFromMatrix() function below
 Count_Formatted <- Count[,3:6]
 remove_rownames(Count_Formatted)
 row.names(Count_Formatted) <- make.names(Count$Gene, unique=T)
@@ -113,7 +115,7 @@ row.names(Count_Formatted) <- make.names(Count$Gene, unique=T)
 
 
 ```{r}
-# Create metadata for colData argument of DESeqDataSetFromMatrix
+# Create metadata table for the colData argument of DESeqDataSetFromMatrix. This table can be played with flexibly as long as it contains a row for each sample and a column containing the experimental variable(s).
 fastqDir= file.path("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/")
 list.files(fastqDir, pattern = "*.fastq") %>%
 str_split(pattern = fixed(".fastq"), n = 2, simplify = T) %>%
@@ -129,18 +131,19 @@ str_split(pattern = fixed("Sample_"), n = 2, simplify = T) %>%
   str_split(pattern = fixed("_"), n = 2, simplify = T) %>%
   map(~ .[1]) %>% 
   .[1:(length(.)/2)] %>%
-  unlist() -> condition
-libraryName = paste(condition,"-", sampleNO, sep = "")
+  unlist() -> timePoint
+libraryName <- list.files(fastqDir, pattern = "*.fastq")
 metadata <- data.frame(sampleNO = sampleNO,
-                       condition = condition,
-                       fastq = fastq,
+                       timePoint = timePoint,
                        libraryName = libraryName)
 
+# Create DESeqDataSet object
+dds <- DESeqDataSetFromMatrix(countData = Count_Formatted, colData = metadata, design = ~ timePoint)
 
-dds <- DESeqDataSetFromMatrix(countData = Count_Formatted, colData = metadata, design = ~ condition)
-
+# Apply DESeq
 dds <- DESeq(dds)
 
+# Capture the result in a table, and prepare simplified table for input into CRISPhieRmix function below
 res <- results(dds)
 res_table <- data.frame(Gene = row.names(res), log2FoldChange = res$log2FoldChange)
 
@@ -150,29 +153,47 @@ head(results(dds, tidy=T))
 
 
 ```{r}
+# Remove NA's from data - otherwise will not work with CRISPhieRmix
+res_table %>%
+  filter(!is.na(log2FoldChange)) -> res_table
+```
+
+```{r}
+# IMPORTANT: The code in this chunk reflects the fact that the sample data used here does not have documented control (non-targetting) sgRNA's. However, the studies we found that did include control sgRNA's tended to provide their count data instead of the upstream fastq data, which would not allow us to demonstrate the above generation of count data, a critical part of this analysis. To reconcile this issue, in this chunk we use control data from a different study (already in count format), from which we extract the vector of non-targetting sgRNA log2FoldChange values to be used in downstream analysis.
+
+# We recommend that the user use this chunk to separate the data from targetting and non-targetting sgRNA's into two tables.
+
 library(xlsx)
 
 neg_ctrlPath <- "/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/neg_contrl.xlsx"
 
 neg_ctrl <- read.xlsx(neg_ctrlPath, 1)
-neg_ctrl <- neg_ctrl$log2FoldChange
+
+# Generate vector of negative control LFC values and corresponding gene ID's in order to ensure utility of remaining pipeline.
+neg_ctrl_vals <- neg_ctrl$log2FoldChange
+neg_ctrl_genes <- neg_ctrl$sgRNA.ID
+
+```
+
+```{r}
+gamma <- res_table$log2FoldChange
+gamma_ctrl <- neg_ctrl_vals
+geneIds <- factor(res_table$Gene, levels = unique(res_table$Gene))
+z <- data.frame(gamma = c(gamma, gamma_ctrl), category = c(rep("gene targetting", length(gamma)), rep("negative control", length(gamma_ctrl))))
+z$category <- factor(z$category, levels = c("negative control", "gene targetting"))
+ggplot(z, aes(x = gamma, color = category)) +
+  geom_density() +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line())
+
 ```
 
 
 ```{r}
-# Try to run CRISPhieRmix with DESeq2 results. So far it works with the mageck rra results but not the DESeq2 results, which I am trying to debug righ now.
-
-res_table %>%
-  filter(!is.na(log2FoldChange)) -> res_table
-
-act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = res_table$Gene, negCtrl = neg_ctrl, PLOT = T)
+act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = res_table$Gene, negCtrl = neg_ctrl_vals, PLOT = T)
 
 ```
 
-
-```{r}
-
-```
 
 
 ```{r}
@@ -180,9 +201,65 @@ hist(act_data$FDR, breaks = 100)
 ```
 
 
+
 ```{r}
 gene_ranks <- data.frame(genes = act_data$genes, FDR = act_data$FDR)
 head(gene_ranks[order(gene_ranks$FDR, decreasing = T), ], 20)
 ```
 
+```{r}
+# Download gold standard of non-essentail and essential genes for comparative analysis from https://github.com/timydaley/CRISPhieRmix/blob/master/vignettes/
+
+Non_Essential <- read.xlsx("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/Non-EssentialGenes.xlsx", 1)$Gene
+Essential <- read.xlsx("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/CoreEssentialGenes.xlsx", 1)$Gene
+```
+
+```{r}
+# Using comparisons with reference data from the above chunk, calculate empirical false discovery rate and empirical true positive rate.
+
+empirical_false_discovery_rate <- length(intersect(Non_Essential, act_data$genes[which(act_data$FDR < 0.1)]))/sum(act_data$FDR < 0.1)
+
+empirical_true_positive_rate <- length(intersect(Essential, act_data$genes[which(act_data$FDR < 0.1)]))/length(Essential)
+ 
+data.frame(empirical_false_discovery_rate = empirical_false_discovery_rate, empirical_true_positive_rate = empirical_true_positive_rate)
+```
+
+```{r}
+EssentialGenes <- data.frame(gene = factor(c(sapply(Essential, toString), 
+                                             sapply(Non_Essential, toString))),
+                             essential = c(rep(1, times = length(Essential)), rep(0,
+                                                  times =  length(Non_Essential))))
+EssentialGenes <- EssentialGenes[which(EssentialGenes$gene %in% act_data$genes), ]
+data.frame("genes" = act_data$genes, "FDR" = act_data$FDR) %>%
+  .[which(.$genes %in% EssentialGenes$gene),] %>%
+  .[match(EssentialGenes$gene, .$genes), ] -> act_dataEssential
+
+fdr.curve <- function(thresh, fdrs, baseline){
+  w = which(fdrs < thresh)
+  if(length(w) > 0){
+    return(sum(1 - baseline[w])/length(w))
+  }
+  else{
+    return(NA)
+  }
+}
+
+s <- seq(from = 0, to = 1, length = 1001)
+act_dataFdrCurve <- sapply(s, function(t) fdr.curve(t, act_dataEssential$FDR,
+                                                             EssentialGenes$essential))
+plot(c(0, s[!is.na(act_dataFdrCurve)]), c(0, act_dataFdrCurve[!is.na(act_dataFdrCurve)]), type = "l", xlab = "estimated FDR", 
+     ylab = "empirical FDR", main = "Estimated vs Empirical Fdr", xlim = c(0, 1), ylim = c(0, 1),
+     lwd = 2, col = "deepskyblue")
+abline(0, 1)
+```
+
+```{r}
+act_dataROC <- pROC::roc(EssentialGenes$essential, 
+                          act_dataEssential$FDR, auc = T)
+plot(act_dataROC, col = "deepskyblue", lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
+```
+
+```{r}
+
+```
 
