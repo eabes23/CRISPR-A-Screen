@@ -176,6 +176,7 @@ neg_ctrl_genes <- neg_ctrl$sgRNA.ID
 ```
 
 ```{r}
+# Plot occurance as a function of LFC for both targetting and negative control sgRNA data.
 gamma <- res_table$log2FoldChange
 gamma_ctrl <- neg_ctrl_vals
 geneIds <- factor(res_table$Gene, levels = unique(res_table$Gene))
@@ -190,6 +191,7 @@ ggplot(z, aes(x = gamma, color = category)) +
 
 
 ```{r}
+# Apply CRISPhieRmix
 act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = res_table$Gene, negCtrl = neg_ctrl_vals, PLOT = T)
 
 ```
@@ -197,12 +199,14 @@ act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = r
 
 
 ```{r}
+# Obtain histogram of frequencies per computed FDR range
 hist(act_data$FDR, breaks = 100)
 ```
 
 
 
 ```{r}
+# Get ranking of top enriched genes
 gene_ranks <- data.frame(genes = act_data$genes, FDR = act_data$FDR)
 head(gene_ranks[order(gene_ranks$FDR, decreasing = T), ], 20)
 ```
@@ -225,6 +229,7 @@ data.frame(empirical_false_discovery_rate = empirical_false_discovery_rate, empi
 ```
 
 ```{r}
+# Plot estimated vs empirical false discovery rate
 EssentialGenes <- data.frame(gene = factor(c(sapply(Essential, toString), 
                                              sapply(Non_Essential, toString))),
                              essential = c(rep(1, times = length(Essential)), rep(0,
@@ -254,6 +259,7 @@ abline(0, 1)
 ```
 
 ```{r}
+# Obtain ROC plot
 act_dataROC <- pROC::roc(EssentialGenes$essential, 
                           act_dataEssential$FDR, auc = T)
 plot(act_dataROC, col = "deepskyblue", lwd = 2, xlim = c(0, 1), ylim = c(0, 1), main = "ROC")
