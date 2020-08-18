@@ -71,7 +71,7 @@ input_folder %>%
 # Run 'mageck count' using terminal, see MAGeCK documentation for syntax.
 system(paste0("mageck count -l sgRNA_library.csv -n Sample --sample-label ", output_names, " --fastq ", input_files))
 
-  
+
 ```
 
 
@@ -85,7 +85,7 @@ list.files(input_folder, full.names = F, pattern = "Day23") %>%
   unlist() %>%
   paste0(",", collapse = "") %>% 
   str_sub(start = 1L, end = -2L) -> output_files_exp
-  
+
 # Get initial (control) sample labels
 list.files(input_folder, full.names = F, pattern = "Day0") %>%
   map(str_split, pattern = fixed(".fastq"), n = 2, simplify = T) %>%
@@ -159,6 +159,15 @@ res_table %>%
 ```
 
 ```{r}
+# Get top positively and negatively enriched genes from DESeq2 data
+gene_enrichment <- data.frame(genes = res_table$Gene, LFC = res_table$log2FoldChange)
+
+head(gene_enrichment[order(res_table$log2FoldChange, decreasing = T), ], 20)
+head(gene_enrichment[order(res_table$log2FoldChange, decreasing = F), ], 20)
+
+```
+
+```{r}
 # IMPORTANT: The code in this chunk reflects the fact that the sample data used here does not have documented control (non-targetting) sgRNA's. However, the studies we found that did include control sgRNA's tended to provide their count data instead of the upstream fastq data, which would not allow us to demonstrate the above generation of count data, a critical part of this analysis. To reconcile this issue, in this chunk we use control data from a different study (already in count format), from which we extract the vector of non-targetting sgRNA log2FoldChange values to be used in downstream analysis.
 
 # We recommend that the user use this chunk to separate the data from targetting and non-targetting sgRNA's into two tables.
@@ -180,9 +189,9 @@ neg_ctrl_genes <- neg_ctrl$sgRNA.ID
 gamma <- res_table$log2FoldChange
 gamma_ctrl <- neg_ctrl_vals
 geneIds <- factor(res_table$Gene, levels = unique(res_table$Gene))
-z <- data.frame(gamma = c(gamma, gamma_ctrl), category = c(rep("gene targetting", length(gamma)), rep("negative control", length(gamma_ctrl))))
-z$category <- factor(z$category, levels = c("negative control", "gene targetting"))
-ggplot(z, aes(x = gamma, color = category)) +
+z1 <- data.frame(gamma = c(gamma, gamma_ctrl), category = c(rep("gene targetting", length(gamma)), rep("negative control", length(gamma_ctrl))))
+z1$category <- factor(z1$category, levels = c("negative control", "gene targetting"))
+ggplot(z1, aes(x = gamma, color = category)) +
   geom_density() +
   theme_bw() +
   theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line())
@@ -206,9 +215,10 @@ hist(act_data$FDR, breaks = 100)
 
 
 ```{r}
-# Get ranking of top enriched genes
+# Get ranking of top genes according to FDR
 gene_ranks <- data.frame(genes = act_data$genes, FDR = act_data$FDR)
 head(gene_ranks[order(gene_ranks$FDR, decreasing = T), ], 20)
+
 ```
 
 ```{r}
@@ -266,6 +276,41 @@ plot(act_dataROC, col = "deepskyblue", lwd = 2, xlim = c(0, 1), ylim = c(0, 1), 
 ```
 
 ```{r}
+# Obtain some statistical parameters and get genes with low FDR
+mu <- act_data$mixFit$mu
+sigma <- act_data$mixFit$sigma
+pq <- act_data$mixFit$pq
+
+topGenes <- act_data$genes[which(act_data$FDR < 0.01)]
+`prop.FDR<0.01` <- length(topGenes)/length(act_data$genes)
+
+data.frame("mu" = mu, "sigma" = sigma, "pq" = pq, "prop.FDR<0.01" = `prop.FDR<0.01`)
+
+# Plot occurance as a function of LFC for both low FDR genes and negative control sgRNA.
+z2 <- data.frame(gamma = c(gamma[which(geneIds %in% topGenes)], gamma_ctrl), category = c(rep("gene targetting", sum(geneIds %in% topGenes)), rep("negative control", length(gamma_ctrl))))
+z2$category <- factor(z2$category, levels = c("negative control", "gene targetting"))
+
+ggplot(z2, aes(x = gamma, color = category)) +
+  geom_density() +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.line = element_line())
 
 ```
 
+```{r}
+# Histogram of LFC vs top genes
+topGenesGammaMixFit <- mixtools::normalmixEM(gamma[which(geneIds %in% topGenes)], k = 2, mu = c(0, -0.15))
+s <- seq(from = -2, to = 2, length = 1001)
+hist(gamma[which(geneIds %in% topGenes)], breaks = 50, probability = T, xlab = "gamma", main = "Histogram of top genes") 
+lines(s, topGenesGammaMixFit$lambda[1]*dnorm(s, mean = topGenesGammaMixFit$mu[1],
+                                            sd = topGenesGammaMixFit$sigma[1]),
+      col = "red", lwd = 2) 
+lines(s, topGenesGammaMixFit$lambda[2]*dnorm(s, mean = topGenesGammaMixFit$mu[2],
+                                             sd = topGenesGammaMixFit$sigma[2]),
+      col = "deepskyblue", lwd = 2) 
+lines(s, topGenesGammaMixFit$lambda[1]*dnorm(s, mean = topGenesGammaMixFit$mu[1],
+                                            sd = topGenesGammaMixFit$sigma[1]) +
+         topGenesGammaMixFit$lambda[2]*dnorm(s, mean = topGenesGammaMixFit$mu[2],
+                                          sd = topGenesGammaMixFit$sigma[2]),
+      col = "darkviolet", lwd = 2, lty = 2)
+```
