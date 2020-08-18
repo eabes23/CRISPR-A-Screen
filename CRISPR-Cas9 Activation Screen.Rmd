@@ -49,7 +49,6 @@ knitr::opts_knit$set(root.dir = input_folder)
 system(paste0("mkdir ", input_folder, "/Mageck_Count/"))
 ```
 
-
 ```{r}
 # Use 'mageck count' function to generate count tables. Code here is designed to automatically run the functions in terminal.
 
@@ -73,7 +72,6 @@ system(paste0("mageck count -l sgRNA_library.csv -n Sample --sample-label ", out
 
 
 ```
-
 
 ```{r}
 # Use 'mageck rra' function to generate enrichment statistics from count tables. Code here is designed to automatically run the functions in terminal.
@@ -100,8 +98,6 @@ system(paste0("mageck test -k Sample.count.txt -t ", output_files_exp, " -c ", o
 
 ```
 
-
-
 ```{r}
 # Read in count matrix outputted from 'mageck rra'
 Count <- read.delim("/Users/ethan_23/Desktop/Bennett_Lab_Summer_2020/CRISPR-Cas9_Screen_Sample_Data/Sample.count.txt")
@@ -112,7 +108,6 @@ remove_rownames(Count_Formatted)
 row.names(Count_Formatted) <- make.names(Count$Gene, unique=T)
 
 ```
-
 
 ```{r}
 # Create metadata table for the colData argument of DESeqDataSetFromMatrix. This table can be played with flexibly as long as it contains a row for each sample and a column containing the experimental variable(s).
@@ -150,7 +145,6 @@ res_table <- data.frame(Gene = row.names(res), log2FoldChange = res$log2FoldChan
 head(results(dds, tidy=T))
 
 ```
-
 
 ```{r}
 # Remove NA's from data - otherwise will not work with CRISPhieRmix
@@ -198,21 +192,16 @@ ggplot(z1, aes(x = gamma, color = category)) +
 
 ```
 
-
 ```{r}
 # Apply CRISPhieRmix
 act_data <- CRISPhieRmix::CRISPhieRmix(x = res_table$log2FoldChange, geneIds = res_table$Gene, negCtrl = neg_ctrl_vals, PLOT = T)
 
 ```
 
-
-
 ```{r}
 # Obtain histogram of frequencies per computed FDR range
 hist(act_data$FDR, breaks = 100)
 ```
-
-
 
 ```{r}
 # Get ranking of top genes according to FDR
